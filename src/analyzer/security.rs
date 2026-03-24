@@ -111,8 +111,8 @@ fn strkey_crc16(data: &[u8]) -> u16 {
 ///   1. Must be exactly 56 characters, all from the base32 alphabet (A–Z, 2–7).
 ///   2. Base32-decode to exactly 35 bytes.
 ///   3. `decoded[0]` must be a recognised version byte:
-///        • `0x30` (6 << 3) → ED25519 public key  → 'G' prefix
-///        • `0x10` (2 << 3) → contract address    → 'C' prefix
+///      • `0x30` (6 << 3) → ED25519 public key  → 'G' prefix
+///      • `0x10` (2 << 3) → contract address    → 'C' prefix
 ///   4. CRC-16/XModem over `decoded[0..33]` must equal the little-endian u16
 ///      stored in `decoded[33..35]`.
 ///
@@ -204,8 +204,10 @@ impl SecurityRule for HardcodedAddressRule {
                                 severity: Severity::Medium,
                                 location: "Data Section".to_string(),
                                 description: format!("Found potential hardcoded address: {}", word),
-                                remediation: "Use Address::from_str from configuration or function \
-                                     arguments instead of hardcoding.".to_string(),
+                                remediation:
+                                    "Use Address::from_str from configuration or function \
+                                     arguments instead of hardcoding."
+                                        .to_string(),
                             });
                         }
                     }
@@ -446,8 +448,7 @@ fn is_cross_contract_host_function_name(name: &str) -> bool {
         if n == *base {
             return true;
         }
-        if n.starts_with(base) {
-            let suffix = &n[base.len()..];
+        if let Some(suffix) = n.strip_prefix(base) {
             if suffix.is_empty() {
                 return true;
             }
@@ -688,16 +689,28 @@ mod tests {
     #[test]
     fn strkey_accepts_well_formed_g_address() {
         let addr = build_strkey(6 << 3, &[0u8; 32]);
-        assert!(addr.starts_with('G'), "sanity: version 0x30 encodes to 'G' prefix");
-        assert!(is_valid_strkey(&addr), "well-formed G address must be accepted");
+        assert!(
+            addr.starts_with('G'),
+            "sanity: version 0x30 encodes to 'G' prefix"
+        );
+        assert!(
+            is_valid_strkey(&addr),
+            "well-formed G address must be accepted"
+        );
     }
 
     /// Same for the contract ('C') variant.
     #[test]
     fn strkey_accepts_well_formed_c_address() {
         let addr = build_strkey(2 << 3, &[0u8; 32]);
-        assert!(addr.starts_with('C'), "sanity: version 0x10 encodes to 'C' prefix");
-        assert!(is_valid_strkey(&addr), "well-formed C address must be accepted");
+        assert!(
+            addr.starts_with('C'),
+            "sanity: version 0x10 encodes to 'C' prefix"
+        );
+        assert!(
+            is_valid_strkey(&addr),
+            "well-formed C address must be accepted"
+        );
     }
 
     /// 56 uppercase-ASCII chars starting with 'G' but with all-'A' payload have
@@ -708,9 +721,12 @@ mod tests {
         // valid (payload + CRC) pair.
         let fake = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         // Length sanity
-        assert_eq!(fake.len(), 58); // <-- deliberately over-long to be safe; trim to 56
+        assert!(fake.len() >= 56); // deliberately over-long; trim to 56
         let fake56 = &fake[..56];
-        assert!(!is_valid_strkey(fake56), "all-A token must be rejected (bad CRC)");
+        assert!(
+            !is_valid_strkey(fake56),
+            "all-A token must be rejected (bad CRC)"
+        );
     }
 
     /// A string that is 56 chars, starts with 'G', but contains characters
@@ -721,19 +737,26 @@ mod tests {
         // Contains '0', '1', and lower-case letters — all outside A-Z/2-7.
         let bad_chars = "G0001111abcdefghABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDE";
         assert_eq!(bad_chars.len(), 53); // not 56, show next case is the real one
-        // Craft exactly 56 chars with an invalid char ('0') at position 1.
+                                         // Craft exactly 56 chars with an invalid char ('0') at position 1.
         let with_zero = "G0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        assert_eq!(with_zero.len(), 57);
+        assert_eq!(with_zero.len(), 56);
         let with_zero56 = &with_zero[..56];
-        assert!(!is_valid_strkey(with_zero56), "token with '0' must be rejected");
+        assert!(
+            !is_valid_strkey(with_zero56),
+            "token with '0' must be rejected"
+        );
     }
 
     /// Strings shorter or longer than 56 characters must always be rejected,
     /// regardless of prefix.
     #[test]
     fn strkey_rejects_wrong_length() {
-        assert!(!is_valid_strkey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")); // 55
-        assert!(!is_valid_strkey("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")); // 57
+        assert!(!is_valid_strkey(
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        )); // 55
+        assert!(!is_valid_strkey(
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        )); // 57
         assert!(!is_valid_strkey("")); // empty
     }
 
@@ -828,7 +851,9 @@ mod tests {
                 continue; // shorter than 56 — would not be picked up anyway
             }
             let wasm = wasm_with_data_string(&t);
-            let findings = rule.analyze_static(&wasm).expect("analyze_static should not error");
+            let findings = rule
+                .analyze_static(&wasm)
+                .expect("analyze_static should not error");
             assert!(
                 findings.is_empty(),
                 "token '{}' must not produce a finding (not a valid StrKey): {:?}",
@@ -848,7 +873,9 @@ mod tests {
 
         let wasm = wasm_with_data_string(&valid_addr);
         let rule = HardcodedAddressRule;
-        let findings = rule.analyze_static(&wasm).expect("analyze_static should not error");
+        let findings = rule
+            .analyze_static(&wasm)
+            .expect("analyze_static should not error");
 
         assert_eq!(findings.len(), 1, "exactly one finding expected for a valid hardcoded address");
         assert_eq!(findings[0].rule_id, "hardcoded-address");
@@ -869,7 +896,9 @@ mod tests {
 
         let wasm = wasm_with_data_string(&payload);
         let rule = HardcodedAddressRule;
-        let findings = rule.analyze_static(&wasm).expect("analyze_static should not error");
+        let findings = rule
+            .analyze_static(&wasm)
+            .expect("analyze_static should not error");
 
         assert_eq!(
             findings.len(),
