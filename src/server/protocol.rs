@@ -9,6 +9,7 @@ pub enum DynamicTraceEventKind {
     StorageWrite,
     Authorization,
     CrossContractCall,
+    CrossContractReturn,
 }
 
 /// Rich dynamic trace entry produced by the runtime and consumed by analyzers.
@@ -20,6 +21,11 @@ pub struct DynamicTraceEvent {
     pub function: Option<String>,
     pub storage_key: Option<String>,
     pub storage_value: Option<String>,
+    /// Call-frame depth at the time this event was emitted (0 = top-level).
+    /// Used by reentrancy analysis to correlate writes with the frame that
+    /// issued the cross-contract call.
+    #[serde(default)]
+    pub call_depth: u32,
 }
 
 /// Source location information (file, line, column)
@@ -192,6 +198,7 @@ pub enum DebugResponse {
 /// Message wrapper for the protocol
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebugMessage {
+    /// Correlation id used to match a response to the originating request.
     pub id: u64,
     pub request: Option<DebugRequest>,
     pub response: Option<DebugResponse>,
@@ -212,5 +219,9 @@ impl DebugMessage {
             request: None,
             response: Some(response),
         }
+    }
+
+    pub fn is_response_for(&self, expected_id: u64) -> bool {
+        self.id == expected_id && self.response.is_some()
     }
 }

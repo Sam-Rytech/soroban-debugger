@@ -35,6 +35,16 @@ impl ReplExecutor {
         let mut executor = ContractExecutor::new(wasm_bytes)?;
         executor.enable_mock_all_auths();
 
+        if let Some(snapshot_path) = &config.network_snapshot {
+            let loader =
+                crate::simulator::SnapshotLoader::from_file(snapshot_path).map_err(|e| {
+                    miette::miette!("Failed to load network snapshot {:?}: {}", snapshot_path, e)
+                })?;
+            let loaded = loader.apply_to_environment()?;
+            executor.apply_snapshot_ledger(&loaded)?;
+            crate::logging::log_display(loaded.format_summary(), crate::logging::LogLevel::Info);
+        }
+
         if let Some(storage_json) = &config.storage {
             executor.set_initial_storage(storage_json.clone())?;
         }
@@ -72,6 +82,13 @@ impl ReplExecutor {
         }
 
         Ok(())
+    }
+
+    /// Return known exported function names for REPL completion.
+    pub fn function_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.signatures.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     fn args_to_json_array_for(&mut self, function: &str, args: &[String]) -> Result<String> {
