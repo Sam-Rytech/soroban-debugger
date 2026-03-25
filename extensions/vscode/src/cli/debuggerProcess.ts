@@ -726,6 +726,121 @@ export class DebuggerProcess {
   }
 }
 
+function debuggerBinaryName(): string {
+  return process.platform === 'win32' ? 'soroban-debug.exe' : 'soroban-debug';
+}
+
+function looksLikeVariableReference(value: string): boolean {
+  return value.includes('${');
+}
+
+export function resolveDebuggerBinaryPath(config: DebuggerProcessConfig): string {
+  const configured = config.binaryPath?.trim();
+  if (configured) {
+    return configured;
+  }
+
+  const envOverride = process.env.SOROBAN_DEBUG_BIN?.trim();
+  if (envOverride) {
+    return envOverride;
+  }
+
+  return debuggerBinaryName();
+}
+
+export async function validateLaunchConfig(
+  config: DebuggerProcessConfig
+): Promise<LaunchPreflightResult> {
+  const issues: LaunchPreflightIssue[] = [];
+  const resolvedBinaryPath = resolveDebuggerBinaryPath(config);
+
+  if (!looksLikeVariableReference(resolvedBinaryPath)) {
+    pushFileIssue(
+      issues,
+      'binaryPath',
+      resolvedBinaryPath,
+      'a readable soroban-debug binary path or a command available on PATH.',
+      ['pickBinary', 'openLaunchConfig', 'openSettings']
+    );
+  }
+
+  if (!config.contractPath || config.contractPath.trim().length === 0) {
+    issues.push({
+      field: 'contractPath',
+      message: "Launch config field 'contractPath' must point to a readable contract WASM file.",
+      expected: 'A readable .wasm file.',
+      quickFixes: ['pickContract', 'openLaunchConfig', 'generateLaunchConfig']
+    });
+  } else if (!looksLikeVariableReference(config.contractPath)) {
+    pushFileIssue(
+      issues,
+      'contractPath',
+      config.contractPath,
+      'a readable contract WASM file.',
+      ['pickContract', 'openLaunchConfig', 'generateLaunchConfig']
+    );
+  }
+
+  if (config.snapshotPath && !looksLikeVariableReference(config.snapshotPath)) {
+    pushFileIssue(
+      issues,
+      'snapshotPath',
+      config.snapshotPath,
+      'a readable snapshot JSON file.',
+      ['pickSnapshot', 'openLaunchConfig', 'generateLaunchConfig']
+    );
+  }
+
+  if (config.entrypoint !== undefined && config.entrypoint.trim().length === 0) {
+    issues.push({
+      field: 'entrypoint',
+      message: "Launch config field 'entrypoint' must be a non-empty string.",
+      expected: "A Soroban function name such as 'main' or 'transfer'.",
+      quickFixes: ['openLaunchConfig', 'generateLaunchConfig']
+    });
+  }
+
+  const argsIssue = validateArgs(config.args ?? []);
+  if (argsIssue) {
+    issues.push(argsIssue);
+  }
+
+  if (config.port !== undefined) {
+    if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65_535) {
+      issues.push({
+        field: 'port',
+        message: `Launch config field 'port' must be an integer between 1 and 65535; received ${String(config.port)}.`,
+        expected: 'An available TCP port between 1 and 65535.',
+        quickFixes: ['openLaunchConfig']
+      });
+    } else if (!(await isPortAvailable(config.port))) {
+      issues.push({
+        field: 'port',
+        message: `Launch config field 'port' is set to ${config.port}, but that port is already in use on 127.0.0.1.`,
+        expected: 'An available TCP port between 1 and 65535.',
+        quickFixes: ['openLaunchConfig']
+      });
+    }
+  }
+
+  if (config.token !== undefined) {
+    if (config.token.trim().length === 0 || /[\r\n]/.test(config.token)) {
+      issues.push({
+        field: 'token',
+        message: "Launch config field 'token' must be a single-line non-empty string.",
+        expected: 'A non-empty authentication token without line breaks.',
+        quickFixes: ['openLaunchConfig']
+      });
+    }
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+    resolvedBinaryPath
+  };
+}
+
 function pushFileIssue(
   issues: LaunchPreflightIssue[],
   field: 'binaryPath' | 'contractPath' | 'snapshotPath',

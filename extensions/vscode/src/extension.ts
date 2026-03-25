@@ -23,6 +23,10 @@ class SorobanDebugConfigurationProvider implements vscode.DebugConfigurationProv
       return config;
     }
 
+    const settings = vscode.workspace.getConfiguration('soroban-debugger', folder);
+    config.requestTimeoutMs = config.requestTimeoutMs ?? settings.get<number>('requestTimeoutMs');
+    config.connectTimeoutMs = config.connectTimeoutMs ?? settings.get<number>('connectTimeoutMs');
+
     const preflight = await validateLaunchConfig(config);
     if (preflight.ok) {
       return config;
@@ -119,15 +123,6 @@ export function activate(context: vscode.ExtensionContext): void {
   logManager = new LogManager(context);
   const factory = new SorobanDebugAdapterDescriptorFactory(context, logManager);
   const configurationProvider = new SorobanDebugConfigurationProvider();
-
-  const configProvider: vscode.DebugConfigurationProvider = {
-    resolveDebugConfiguration(folder, config) {
-      const settings = vscode.workspace.getConfiguration('soroban-debugger', folder);
-      config.requestTimeoutMs = config.requestTimeoutMs ?? settings.get<number>('requestTimeoutMs');
-      config.connectTimeoutMs = config.connectTimeoutMs ?? settings.get<number>('connectTimeoutMs');
-      return config;
-    }
-  };
 
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory('soroban', factory),
