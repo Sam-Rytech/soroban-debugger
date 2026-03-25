@@ -1,6 +1,5 @@
 use soroban_debugger::analyzer::security::SecurityAnalyzer;
 use soroban_debugger::server::protocol::{DynamicTraceEvent, DynamicTraceEventKind};
-use std::default::Default;
 
 fn uleb128(mut value: usize) -> Vec<u8> {
     let mut out = Vec::new();
