@@ -1,22 +1,17 @@
 use crate::runtime::executor::ContractExecutor;
 use crate::server::protocol::{DynamicTraceEvent, DynamicTraceEventKind};
-use crate::utils::wasm::{parse_instructions, WasmInstruction};
+use crate::utils::wasm::analyze_arithmetic_ops;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use wasmparser::{Operator, Parser, Payload};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum Severity {
+    #[default]
     Low,
     Medium,
     High,
-}
-
-impl Default for Severity {
-    fn default() -> Self {
-        Severity::Low
-    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -88,7 +83,7 @@ impl SecurityAnalyzer {
 
         for rule in &self.rules {
             let name = rule.name();
-            
+
             if !filter.enable_rules.is_empty() && !filter.enable_rules.iter().any(|r| r == name) {
                 continue;
             }
@@ -268,23 +263,29 @@ impl SecurityRule for ArithmeticCheckRule {
         "Detects potential for unchecked arithmetic overflow."
     }
 
-    fn analyze_static(&self, _wasm_bytes: &[u8]) -> Result<Vec<SecurityFinding>> {
-        // TODO: Implement is_arithmetic and is_guarded
-        Ok(Vec::new())
-    }
-}
-
-impl ArithmeticCheckRule {
-    fn is_arithmetic(instr: &WasmInstruction) -> bool {
-        matches!(
-            instr,
-            WasmInstruction::I32Add
-                | WasmInstruction::I32Sub
-                | WasmInstruction::I32Mul
-                | WasmInstruction::I64Add
-                | WasmInstruction::I64Sub
-                | WasmInstruction::I64Mul
-        )
+    fn analyze_static(&self, wasm_bytes: &[u8]) -> Result<Vec<SecurityFinding>> {
+        let analyses = analyze_arithmetic_ops(wasm_bytes)?;
+        Ok(analyses
+            .into_iter()
+            .map(|analysis| SecurityFinding {
+                rule_id: self.name().to_string(),
+                severity: Severity::Medium,
+                location: format!(
+                    "Function {} instruction {}",
+                    analysis.function_index, analysis.instruction_index
+                ),
+                description: format!(
+                    "Potential unchecked arithmetic operation at byte offset {}. Confidence: {}. {}",
+                    analysis.offset,
+                    analysis.confidence.label(),
+                    analysis.rationale
+                ),
+                remediation: "Use checked arithmetic or validate bounds before arithmetic operations to prevent overflow/underflow."
+                    .to_string(),
+                confidence: Some(analysis.confidence.score()),
+                rationale: Some(analysis.rationale),
+            })
+            .collect())
     }
 }
 
@@ -352,21 +353,36 @@ impl SecurityRule for AuthorizationCheckRule {
             }
         }
 
-        if !problematic_writes.is_empty() {
-            let mut seen_descriptions = std::collections::HashSet::new();
-            for (write, desc) in problematic_writes {
-                if seen_descriptions.insert(desc.clone()) {
-                    findings.push(SecurityFinding {
-                        rule_id: self.name().to_string(),
-                        severity: Severity::High,
-                        location: format!("Trace seq {}", write.sequence),
-                        description: desc,
-                        remediation: "Ensure all sensitive functions call `address.require_auth()` for the appropriate actor before mutating state.".to_string(),
-                        confidence: Some(0.9),
-                        rationale: Some("Found storage writes occurring outside authorized scope or for mismatched actors within the call frame.".to_string()),
-                    });
-                }
-            }
+        // If we have storage writes without preceding auth in the same scope, report a finding
+        if !problematic_storage_writes.is_empty() {
+            let details: Vec<String> = problematic_storage_writes
+                .iter()
+                .take(3)
+                .map(|e| {
+                    format!(
+                        "Seq {}: Write in {} at depth {}",
+                        e.sequence,
+                        e.function.as_deref().unwrap_or("unknown"),
+                        e.call_depth.unwrap_or(0)
+                    )
+                })
+                .collect();
+
+            let description = format!(
+                "Storage mutation detected without preceding authorization in the same call frame. Found {} storage write(s) occurring outside authorized scope. Examples: {}",
+                problematic_storage_writes.len(),
+                details.join(", ")
+            );
+
+            findings.push(SecurityFinding {
+                rule_id: self.name().to_string(),
+                severity: Severity::High,
+                location: "Dynamic trace".to_string(),
+                description,
+                remediation: "Ensure all sensitive functions call `address.require_auth()` in their own scope before mutating state.".to_string(),
+                confidence: None,
+                rationale: None,
+            });
         }
         Ok(findings)
     }
@@ -591,10 +607,10 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
     let mut signal = UnboundedStaticSignal::default();
 
     let mut storage_calls_in_loops = 0usize;
-    let mut storage_calls_outside_loops = 0usize;
+    let mut _storage_calls_outside_loops = 0usize;
     let mut loop_types_with_calls: HashSet<String> = HashSet::new();
     let mut loop_types_seen: HashSet<String> = HashSet::new();
-    let mut conditional_branches = 0usize;
+    let mut _conditional_branches = 0usize;
 
     for payload in Parser::new(0).parse_all(wasm_bytes) {
         let Ok(payload) = payload else {
@@ -644,7 +660,7 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
                             control_flow_stack.push(ControlFlowFrame::Block);
                         }
                         Operator::If { .. } => {
-                            conditional_branches += 1;
+                            _conditional_branches += 1;
                             control_flow_stack.push(ControlFlowFrame::If);
                         }
                         Operator::Else => {}
@@ -669,12 +685,12 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
                                         }
                                     }
                                 } else {
-                                    storage_calls_outside_loops += 1;
+                                    _storage_calls_outside_loops += 1;
                                 }
                             }
                         }
                         Operator::BrIf { .. } => {
-                            conditional_branches += 1;
+                            _conditional_branches += 1;
                         }
                         _ => {}
                     }
@@ -748,7 +764,7 @@ fn is_storage_read_import(module: &str, name: &str) -> bool {
                 }
             }
         }
-        
+
         // Handle prefix-qualified names like "contract_storage_get".
         if n.ends_with(base) {
             return true;
@@ -1223,7 +1239,7 @@ mod tests {
             function: None,
             storage_key: None,
             storage_value: None,
-            call_depth: depth as u64,
+            call_depth: Some(depth as u64),
             caller: None,
             address: None,
         }
