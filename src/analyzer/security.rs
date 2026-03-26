@@ -306,42 +306,34 @@ impl SecurityRule for ArithmeticCheckRule {
         "Detects potential for unchecked arithmetic overflow."
     }
 
-    fn severity(&self) -> Severity {
-        Severity::Medium
-    }
-
     fn analyze_static(&self, wasm_bytes: &[u8]) -> Result<Vec<SecurityFinding>> {
-        let mut findings = Vec::new();
-        let instructions = parse_instructions(wasm_bytes);
-
-        for (i, instr) in instructions.iter().enumerate() {
-            if Self::is_arithmetic(instr) {
-                findings.push(SecurityFinding {
-                    rule_id: self.id().to_string(),
-                    severity: Severity::Medium,
-                    location: format!("Instruction {}", i),
-                    description: format!("Unchecked arithmetic operation detected: {:?}", instr),
-                    remediation: "Ensure arithmetic operations are guarded with proper bounds checks or overflow handling.".to_string(),
-                    confidence: None,
-                    rationale: None,
-                });
-            }
-        }
-
-        Ok(findings)
-    }
-}
-
-impl ArithmeticCheckRule {
-    fn is_arithmetic(instr: &WasmInstruction) -> bool {
-        matches!(
-            instr,
-            WasmInstruction::I32Add
-                | WasmInstruction::I32Sub
-                | WasmInstruction::I32Mul
-                | WasmInstruction::I64Add
-                | WasmInstruction::I64Sub
-                | WasmInstruction::I64Mul
+        Ok(
+            analyze_arithmetic_ops(wasm_bytes)?
+                .into_iter()
+                .map(|analysis| {
+                    let confidence_label = analysis.confidence.label();
+                    let rationale = analysis.rationale;
+                    SecurityFinding {
+                        rule_id: self.name().to_string(),
+                        severity: Severity::Medium,
+                        location: format!(
+                            "Function {} instruction {} (offset {})",
+                            analysis.function_index,
+                            analysis.instruction_index,
+                            analysis.offset
+                        ),
+                        description: format!(
+                            "Potential unchecked arithmetic operation detected: {:?}. Confidence: {}. {}",
+                            analysis.instruction,
+                            confidence_label,
+                            rationale
+                        ),
+                        remediation: "Ensure arithmetic operations are guarded with proper bounds checks or overflow handling.".to_string(),
+                        confidence: Some(analysis.confidence.score()),
+                        rationale: Some(rationale),
+                    }
+                })
+                .collect(),
         )
     }
 
@@ -718,10 +710,8 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
     let mut signal = UnboundedStaticSignal::default();
 
     let mut storage_calls_in_loops = 0usize;
-    let mut _storage_calls_outside_loops = 0usize;
     let mut loop_types_with_calls: HashSet<String> = HashSet::new();
     let mut loop_types_seen: HashSet<String> = HashSet::new();
-    let mut _conditional_branches = 0usize;
 
     for payload in Parser::new(0).parse_all(wasm_bytes) {
         let Ok(payload) = payload else {
@@ -771,7 +761,6 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
                             control_flow_stack.push(ControlFlowFrame::Block);
                         }
                         Operator::If { .. } => {
-                            _conditional_branches += 1;
                             control_flow_stack.push(ControlFlowFrame::If);
                         }
                         Operator::Else => {}
@@ -795,14 +784,10 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
                                             loop_types_with_calls.insert(loop_type.to_string());
                                         }
                                     }
-                                } else {
-                                    _storage_calls_outside_loops += 1;
                                 }
                             }
                         }
-                        Operator::BrIf { .. } => {
-                            _conditional_branches += 1;
-                        }
+                        Operator::BrIf { .. } => {}
                         _ => {}
                     }
                 }
@@ -834,6 +819,8 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
         loop_types_with_calls,
         storage_calls_outside_loops
     ));
+    let _ = loop_types_with_calls;
+    signal.confidence = Some(confidence);
 
     signal.suspicious = storage_calls_in_loops > 0;
     signal
@@ -1677,6 +1664,8 @@ mod tests {
                 call_depth: None,
                 caller: None,
                 function: Some("sweep".to_string()),
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: Some(format!("user:{}", i % 4)),
                 storage_value: None,
             });
@@ -1723,7 +1712,8 @@ mod tests {
                 message: "main -> withdraw".to_string(),
                 caller: Some("main".to_string()),
                 function: Some("withdraw".to_string()),
-                call_depth: 0,
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: None,
                 storage_value: None,
                 address: None,
@@ -1734,7 +1724,8 @@ mod tests {
                 message: "withdraw invokes token.transfer".to_string(),
                 caller: Some("main".to_string()),
                 function: Some("withdraw".to_string()),
-                call_depth: 0,
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: None,
                 storage_value: None,
                 address: None,
@@ -1745,7 +1736,8 @@ mod tests {
                 message: "write balance".to_string(),
                 caller: Some("main".to_string()),
                 function: Some("withdraw".to_string()),
-                call_depth: 0,
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: Some("balance:alice".to_string()),
                 storage_value: Some("0".to_string()),
                 address: None,
@@ -1772,7 +1764,8 @@ mod tests {
                 message: "main -> settle".to_string(),
                 caller: Some("main".to_string()),
                 function: Some("settle".to_string()),
-                call_depth: 0,
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: None,
                 storage_value: None,
                 address: None,
@@ -1783,7 +1776,8 @@ mod tests {
                 message: "mark settled".to_string(),
                 caller: Some("main".to_string()),
                 function: Some("settle".to_string()),
-                call_depth: 0,
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: Some("settled:alice".to_string()),
                 storage_value: Some("true".to_string()),
                 address: None,
@@ -1794,7 +1788,8 @@ mod tests {
                 message: "settle invokes payout".to_string(),
                 caller: Some("main".to_string()),
                 function: Some("settle".to_string()),
-                call_depth: 0,
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: None,
                 storage_value: None,
                 address: None,
@@ -1805,7 +1800,8 @@ mod tests {
                 message: "emit bookkeeping marker".to_string(),
                 caller: Some("main".to_string()),
                 function: Some("settle".to_string()),
-                call_depth: 0,
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: Some("audit:last_settle".to_string()),
                 storage_value: Some("1".to_string()),
                 address: None,
@@ -1824,7 +1820,8 @@ mod tests {
                 message: "main -> withdraw".to_string(),
                 caller: Some("main".to_string()),
                 function: Some("withdraw".to_string()),
-                call_depth: 0,
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: None,
                 storage_value: None,
                 address: None,
@@ -1835,7 +1832,8 @@ mod tests {
                 message: "withdraw invokes token.transfer".to_string(),
                 caller: Some("main".to_string()),
                 function: Some("withdraw".to_string()),
-                call_depth: 0,
+                call_depth: Some(0),
+                call_depth: Some(0),
                 storage_key: None,
                 storage_value: None,
                 address: None,
@@ -1846,7 +1844,8 @@ mod tests {
                 message: "nested contract writes receipt".to_string(),
                 caller: Some("withdraw".to_string()),
                 function: Some("token.transfer".to_string()),
-                call_depth: 1,
+                call_depth: Some(0),
+                call_depth: Some(1),
                 storage_key: Some("receipt:1".to_string()),
                 storage_value: Some("ok".to_string()),
                 address: None,

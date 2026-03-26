@@ -182,6 +182,7 @@ impl Stepper {
         }
         false
     }
+
     fn find_next_control_flow(&self, debug_state: &mut DebugState) -> bool {
         for _ in 0..STEP_GUARD {
             match debug_state.next_instruction() {

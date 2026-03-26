@@ -361,11 +361,6 @@ export class DebuggerProcess {
 
     try {
       if (shouldSpawnServer) {
-        this.emitLaunchLifecycle({
-          phase: "spawn",
-          status: "started",
-          message: `Spawning debugger server on port ${port}...`,
-        });
         const child = spawn(binaryPath as string, this.buildArgs(port), {
           stdio: ["ignore", "pipe", "pipe"],
           env: {
@@ -379,11 +374,6 @@ export class DebuggerProcess {
           this.rejectPendingRequests(new Error("Debugger server exited"));
           this.socket?.destroy();
           this.socket = null;
-        });
-        this.emitLaunchLifecycle({
-          phase: "spawn",
-          status: "completed",
-          message: `Debugger server spawned on port ${port}.`,
         });
       } else if (!this.config.port) {
         throw new Error(
