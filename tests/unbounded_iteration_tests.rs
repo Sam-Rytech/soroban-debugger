@@ -316,7 +316,8 @@ fn dynamic_analysis_detects_high_storage_pressure() {
             function: None,
             storage_key: Some(format!("key_{}", i % 10)), // Only 10 unique keys
             storage_value: None,
-            call_depth: None,
+            call_depth: 0,
+            address: None,
         });
     }
 
@@ -361,7 +362,8 @@ fn dynamic_analysis_ignores_reasonable_storage_access() {
             function: None,
             storage_key: Some(format!("key_{}", i)), // 10 unique keys
             storage_value: None,
-            call_depth: None,
+            call_depth: 0,
+            address: None,
         });
     }
 
